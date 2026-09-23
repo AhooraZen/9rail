@@ -64,19 +64,10 @@ if [ -f "$DATA_DIR/9router/db/data.sqlite" ]; then
   # Support password / auth override via environment variables
   PASS="${ADMIN_PASSWORD:-${INITIAL_PASSWORD}}"
   if [ -n "$PASS" ]; then
-    HASH=$(node -e "
-      let bcrypt;
-      for (const p of ['bcryptjs', '$(npm root -g)/9router/node_modules/bcryptjs', '$(npm root -g)/9router/app/node_modules/bcryptjs']) {
-        try { bcrypt = require(p); break; } catch (e) {}
-      }
-      if (bcrypt) {
-        console.log(bcrypt.hashSync('$PASS', 10));
-      }
-    " 2>/dev/null || true)
-
+    HASH=$(node -e "try { const b = require('bcryptjs'); console.log(b.hashSync(process.argv[1], 10)); } catch(e) { console.log(''); }" "$PASS" 2>/dev/null || true)
     if [ -n "$HASH" ]; then
       sqlite3 "$DATA_DIR/9router/db/data.sqlite" "UPDATE settings SET data = json_set(data, '$.password', '$HASH', '$.requireLogin', true) WHERE id=1;" 2>/dev/null || true
-      echo "🔑 Password updated in database from INITIAL_PASSWORD/ADMIN_PASSWORD."
+      echo "🔑 Password successfully updated in database from INITIAL_PASSWORD/ADMIN_PASSWORD."
     fi
   fi
 

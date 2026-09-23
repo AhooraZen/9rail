@@ -3,8 +3,8 @@ FROM node:22-alpine
 # System dependencies for SQLite, git sync, compression and shell utilities
 RUN apk add --no-cache sqlite git zstd curl ca-certificates bash jq
 
-# Install 9router globally
-RUN npm install -g 9router@latest
+# Install 9router and bcryptjs globally
+RUN npm install -g 9router@latest bcryptjs
 
 WORKDIR /app
 
