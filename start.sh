@@ -60,6 +60,30 @@ if [ -f "$DATA_DIR/9router/db/data.sqlite" ]; then
   else
     echo "✅ SQLite database verified (integrity: ok)."
   fi
+
+  # Support password / auth override via environment variables
+  PASS="${ADMIN_PASSWORD:-${INITIAL_PASSWORD}}"
+  if [ -n "$PASS" ]; then
+    HASH=$(node -e "
+      let bcrypt;
+      for (const p of ['bcryptjs', '$(npm root -g)/9router/node_modules/bcryptjs', '$(npm root -g)/9router/app/node_modules/bcryptjs']) {
+        try { bcrypt = require(p); break; } catch (e) {}
+      }
+      if (bcrypt) {
+        console.log(bcrypt.hashSync('$PASS', 10));
+      }
+    " 2>/dev/null || true)
+
+    if [ -n "$HASH" ]; then
+      sqlite3 "$DATA_DIR/9router/db/data.sqlite" "UPDATE settings SET data = json_set(data, '$.password', '$HASH', '$.requireLogin', true) WHERE id=1;" 2>/dev/null || true
+      echo "🔑 Password updated in database from INITIAL_PASSWORD/ADMIN_PASSWORD."
+    fi
+  fi
+
+  if [ "$REQUIRE_LOGIN" = "false" ]; then
+    sqlite3 "$DATA_DIR/9router/db/data.sqlite" "UPDATE settings SET data = json_set(data, '$.requireLogin', false) WHERE id=1;" 2>/dev/null || true
+    echo "🔓 Login disabled in database (REQUIRE_LOGIN=false)."
+  fi
 fi
 
 # --- STEP 2: Background atomic backup daemon (syncs to branch '9router') ---
