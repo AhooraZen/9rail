@@ -17,18 +17,29 @@ TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-$GITHUB_PERSONAL_ACCESS_TOKEN}}"
 REPO="${DB_REPO:-AhooraZen/dbb}"
 RESTORE_TMP="/tmp/dbb_restore"
 
+DB_FILE="$DATA_DIR/9router/db/data.sqlite"
+
+# Check if database is missing or empty (0 settings/providers)
+SHOULD_RESTORE=0
+if [ ! -f "$DB_FILE" ]; then
+  SHOULD_RESTORE=1
+elif [ "$(sqlite3 "$DB_FILE" "SELECT count(*) FROM settings;" 2>/dev/null || echo 0)" -eq 0 ]; then
+  echo "⚠️ Existing database is empty or uninitialized. Triggering restore..."
+  SHOULD_RESTORE=1
+fi
+
 # --- STEP 1: Restore SQLite database from GitHub repo 'dbb' if needed ---
-if [ -n "$TOKEN" ] && [ ! -f "$DATA_DIR/9router/db/data.sqlite" ]; then
+if [ -n "$TOKEN" ] && [ "$SHOULD_RESTORE" -eq 1 ]; then
   echo "🔍 Restoring 9Router database from $REPO..."
   rm -rf "$RESTORE_TMP"
   
   # Try branch '9router' first
   if git clone --depth 1 -b 9router "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$RESTORE_TMP" 2>/dev/null; then
     if [ -f "$RESTORE_TMP/data.sqlite" ]; then
-      cp "$RESTORE_TMP/data.sqlite" "$DATA_DIR/9router/db/data.sqlite"
-      echo "✅ Database restored from '9router' branch."
+      cp "$RESTORE_TMP/data.sqlite" "$DB_FILE"
+      echo "✅ Database restored from '9router' branch (size: $(du -h "$DB_FILE" | cut -f1))."
     elif [ -f "$RESTORE_TMP/9router.tar.zst" ]; then
-      tar -I zstd -xf "$RESTORE_TMP/9router.tar.zst" -C "$DATA_DIR/9router/db" 2>/dev/null || true
+      zstd -d -c "$RESTORE_TMP/9router.tar.zst" | tar -xf - -C "$DATA_DIR/9router/db" 2>/dev/null || true
       echo "✅ Database restored from '9router.tar.zst' on '9router' branch."
     fi
   # Fallback to 'main' branch (where the initial archive exists)
@@ -36,12 +47,12 @@ if [ -n "$TOKEN" ] && [ ! -f "$DATA_DIR/9router/db/data.sqlite" ]; then
     if [ -f "$RESTORE_TMP/databases.tar.zst" ]; then
       EXTRACT_DIR="/tmp/extract_dbb"
       rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
-      tar -I zstd -xf "$RESTORE_TMP/databases.tar.zst" -C "$EXTRACT_DIR" 2>/dev/null || tar -xf "$RESTORE_TMP/databases.tar.zst" -C "$EXTRACT_DIR" 2>/dev/null || true
+      zstd -d -c "$RESTORE_TMP/databases.tar.zst" | tar -xf - -C "$EXTRACT_DIR" 2>/dev/null || true
       if [ -f "$EXTRACT_DIR/9router/db/data.sqlite" ]; then
-        cp "$EXTRACT_DIR/9router/db/data.sqlite" "$DATA_DIR/9router/db/data.sqlite"
+        cp "$EXTRACT_DIR/9router/db/data.sqlite" "$DB_FILE"
         echo "✅ Initial 9Router database extracted and restored from 'main' branch archive."
       elif [ -f "$EXTRACT_DIR/data.sqlite" ]; then
-        cp "$EXTRACT_DIR/data.sqlite" "$DATA_DIR/9router/db/data.sqlite"
+        cp "$EXTRACT_DIR/data.sqlite" "$DB_FILE"
         echo "✅ Database extracted from archive."
       fi
       rm -rf "$EXTRACT_DIR"
@@ -51,14 +62,14 @@ if [ -n "$TOKEN" ] && [ ! -f "$DATA_DIR/9router/db/data.sqlite" ]; then
 fi
 
 # Verify integrity and auto-recover active SQLite database if needed
-if [ -f "$DATA_DIR/9router/db/data.sqlite" ]; then
-  chk="$(sqlite3 "$DATA_DIR/9router/db/data.sqlite" "PRAGMA integrity_check;" 2>/dev/null || echo "corrupt")"
+if [ -f "$DB_FILE" ]; then
+  chk="$(sqlite3 "$DB_FILE" "PRAGMA integrity_check;" 2>/dev/null || echo "corrupt")"
   if [ "$chk" != "ok" ]; then
     echo "⚠️ [INTEGRITY WARNING] Database data.sqlite: $chk"
     echo "🔧 [AUTO-REPAIR] Attempting automatic recovery..."
-    sqlite3 "$DATA_DIR/9router/db/data.sqlite" "REINDEX;" 2>/dev/null || true
+    sqlite3 "$DB_FILE" "REINDEX;" 2>/dev/null || true
   else
-    echo "✅ SQLite database verified (integrity: ok)."
+    echo "✅ SQLite database verified (integrity: ok, size: $(du -h "$DB_FILE" | cut -f1), providers: $(sqlite3 "$DB_FILE" "SELECT count(*) FROM providerConnections;" 2>/dev/null || echo 0))."
   fi
 
   # Support password / auth override via environment variables
@@ -66,13 +77,13 @@ if [ -f "$DATA_DIR/9router/db/data.sqlite" ]; then
   if [ -n "$PASS" ]; then
     HASH=$(node -e "try { const b = require('bcryptjs'); console.log(b.hashSync(process.argv[1], 10)); } catch(e) { console.log(''); }" "$PASS" 2>/dev/null || true)
     if [ -n "$HASH" ]; then
-      sqlite3 "$DATA_DIR/9router/db/data.sqlite" "UPDATE settings SET data = json_set(data, '$.password', '$HASH', '$.requireLogin', true) WHERE id=1;" 2>/dev/null || true
+      sqlite3 "$DB_FILE" "UPDATE settings SET data = json_set(data, '$.password', '$HASH', '$.requireLogin', true) WHERE id=1;" 2>/dev/null || true
       echo "🔑 Password successfully updated in database from INITIAL_PASSWORD/ADMIN_PASSWORD."
     fi
   fi
 
   if [ "$REQUIRE_LOGIN" = "false" ]; then
-    sqlite3 "$DATA_DIR/9router/db/data.sqlite" "UPDATE settings SET data = json_set(data, '$.requireLogin', false) WHERE id=1;" 2>/dev/null || true
+    sqlite3 "$DB_FILE" "UPDATE settings SET data = json_set(data, '$.requireLogin', false) WHERE id=1;" 2>/dev/null || true
     echo "🔓 Login disabled in database (REQUIRE_LOGIN=false)."
   fi
 fi
@@ -92,8 +103,11 @@ backup_loop() {
 
   while true; do
     sleep "$INTERVAL"
-    DB_FILE="$DATA_DIR/9router/db/data.sqlite"
     [ ! -f "$DB_FILE" ] && continue
+
+    # Do not backup if database is somehow empty
+    SETTING_CNT="$(sqlite3 "$DB_FILE" "SELECT count(*) FROM settings;" 2>/dev/null || echo 0)"
+    [ "$SETTING_CNT" -eq 0 ] && continue
 
     CURRENT_CS=$(sha256sum "$DB_FILE" 2>/dev/null | awk '{print $1}')
     LAST_CS=""
