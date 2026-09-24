@@ -92,7 +92,7 @@ fi
 backup_loop() {
   SYNC_DIR="$DATA_DIR/.dbb_sync_9router"
   CHECKSUM_FILE="$DATA_DIR/.9router_checksum.sha256"
-  INTERVAL="${BACKUP_INTERVAL:-300}"
+  INTERVAL="${BACKUP_INTERVAL:-3600}"
 
   if [ -z "$TOKEN" ]; then
     echo "⚠️ GH_TOKEN not provided; backup daemon disabled."
@@ -109,7 +109,9 @@ backup_loop() {
     SETTING_CNT="$(sqlite3 "$DB_FILE" "SELECT count(*) FROM settings;" 2>/dev/null || echo 0)"
     [ "$SETTING_CNT" -eq 0 ] && continue
 
-    CURRENT_CS=$(sha256sum "$DB_FILE" 2>/dev/null | awk '{print $1}')
+    # Calculate checksum based on configuration & provider tables (ignoring volatile ephemeral logs)
+    CURRENT_CS=$(sqlite3 "$DB_FILE" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'request%' AND name NOT LIKE 'log%'; " 2>/dev/null | while read -r tbl; do sqlite3 "$DB_FILE" "SELECT * FROM $tbl;" 2>/dev/null; done | sha256sum | awk '{print $1}')
+    [ -z "$CURRENT_CS" ] && CURRENT_CS=$(sha256sum "$DB_FILE" 2>/dev/null | awk '{print $1}')
     LAST_CS=""
     [ -f "$CHECKSUM_FILE" ] && LAST_CS=$(cat "$CHECKSUM_FILE" 2>/dev/null || true)
 
@@ -117,10 +119,11 @@ backup_loop() {
       continue
     fi
 
-    # 1. Atomic online backup snapshot
+    # 1. Atomic online backup snapshot with vacuuming
     STAGING="/tmp/9router_backup"
     rm -rf "$STAGING" && mkdir -p "$STAGING"
     sqlite3 "$DB_FILE" ".backup '$STAGING/data.sqlite'" 2>/dev/null || true
+    sqlite3 "$STAGING/data.sqlite" "VACUUM;" 2>/dev/null || true
 
     # 2. Check snapshot integrity
     CHK=$(sqlite3 "$STAGING/data.sqlite" "PRAGMA integrity_check;" 2>/dev/null || echo "fail")
