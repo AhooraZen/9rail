@@ -4,7 +4,7 @@ FROM node:22-alpine
 RUN apk add --no-cache sqlite git zstd curl ca-certificates bash jq tini
 
 # Install 9router and bcryptjs globally
-RUN npm install -g 9router@$(npm view 9router version)bcryptjs --prefer-online 
+RUN npm install -g 9router@$(npm view 9router version) bcryptjs --prefer-online 
 
 WORKDIR /app
 
