@@ -169,7 +169,7 @@ LISTEN_PORT="${PORT:-20128}"
 if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/custom-server.js" ]; then
   echo "📡 Launching 9Router standalone server from $APP_DIR on port $LISTEN_PORT..."
   cd "$APP_DIR"
-  exec env PORT="$LISTEN_PORT" HOSTNAME="0.0.0.0" node --optimize_for_size --max-old-space-size=256 custom-server.js
+  exec env PORT="$LISTEN_PORT" HOSTNAME="0.0.0.0" node --max-old-space-size="${NODE_MAX_OLD_SPACE_SIZE:-2048}" custom-server.js
 else
   echo "📡 Launching 9Router with global CLI on port $LISTEN_PORT..."
   exec 9router start --port "$LISTEN_PORT" --host 0.0.0.0
